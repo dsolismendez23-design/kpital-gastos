@@ -1,1 +1,42 @@
-[]
+[
+  {
+    "id": "imp202607010001",
+    "fecha": "2026-06-25",
+    "proveedor": "Alvarado",
+    "monto": 12285,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-01T23:16:56.000Z"
+  },
+  {
+    "id": "imp202607010002",
+    "fecha": "2026-06-29",
+    "proveedor": "EPA",
+    "monto": 56335,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-01T23:16:56.000Z"
+  },
+  {
+    "id": "imp202607010003",
+    "fecha": "2026-06-30",
+    "proveedor": "Bella Vista",
+    "monto": 3900,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-01T23:16:56.000Z"
+  },
+  {
+    "id": "imp202607010004",
+    "fecha": "2026-06-30",
+    "proveedor": "EPA",
+    "monto": 42900,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-01T23:16:56.000Z"
+  },
+  {
+    "id": "imp202607010005",
+    "fecha": "2026-06-30",
+    "proveedor": "El Pintor",
+    "monto": 19950,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-01T23:16:56.000Z"
+  }
+]
