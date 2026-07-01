@@ -493,8 +493,19 @@
     if (!state.config) {
       return '<main>' + renderSetupHero() + '</main>';
     }
-    if (state.tab === 'gastos') return '<main>' + renderGastosTab() + '</main>' + renderFab();
-    return '<main>' + renderReportesTab() + '</main>';
+    if (state.tab === 'gastos') return '<main>' + renderRefreshBar() + renderGastosTab() + '</main>' + renderFab();
+    return '<main>' + renderRefreshBar() + renderReportesTab() + '</main>';
+  }
+
+  function renderRefreshBar() {
+    var syncing = state.syncStatus === 'syncing';
+    return (
+      '<div style="margin-bottom:12px;">' +
+        '<button type="button" class="btn btn-secondary" data-action="refresh" ' + (syncing ? 'disabled' : '') + '>' +
+          (syncing ? '<span class="spinner"></span> Actualizando…' : '&#8635; Actualizar') +
+        '</button>' +
+      '</div>'
+    );
   }
 
   function renderSetupHero() {
