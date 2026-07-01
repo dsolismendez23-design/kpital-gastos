@@ -1,0 +1,13 @@
+{
+  "name": "K-PITAL Gastos",
+  "short_name": "K-PITAL",
+  "description": "Registro y reportes de gastos de K-PITAL",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#12141c",
+  "theme_color": "#12141c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
