@@ -44,6 +44,8 @@ La lista se actualiza sola cada 20 segundos y también al volver a abrir la app 
 3. Toca **Guardar y conectar**. Repite esto en cada celular del equipo (solo se hace una vez por dispositivo, luego queda guardado).
 4. En el celular, se puede usar el botón "Agregar a pantalla de inicio" del navegador para que se vea como una app normal.
 
+**Forma rápida para conectar un dispositivo nuevo:** en un dispositivo ya conectado, entra a Configuración y toca **"Copiar configuración para otro dispositivo"** — copia un código de texto (usuario|repositorio|rama|token). Envíalo por un canal privado (ej. WhatsApp) a la persona que necesita conectar un celular nuevo. Esa persona pega el código en el campo de arriba en Configuración y toca **"Usar este código y conectar"**, sin tener que escribir los 4 campos a mano.
+
 ## Uso
 
 - **Gastos**: botón "+" para registrar un gasto nuevo (fecha, proveedor, monto de la factura y "Pagado por"). Tocar un gasto de la lista lo abre para editarlo o eliminarlo.

@@ -400,6 +400,35 @@
     render();
   }
 
+  function copyConfigForSharing() {
+    var cfg = state.config;
+    if (!cfg) return;
+    var code = [cfg.owner, cfg.repo, cfg.branch || 'main', cfg.token].join('|');
+    var done = function () { showToast('Configuración copiada. Compártela solo por un canal seguro con tu equipo.'); };
+    var fallback = function () { window.prompt('Copia este código de configuración:', code); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function usePastedConfig() {
+    var input = document.getElementById('c-paste');
+    var raw = (input ? input.value : '').trim();
+    var parts = raw.split('|').map(function (s) { return s.trim(); });
+    if (parts.length !== 4 || !parts[0] || !parts[1] || !parts[3]) {
+      showToast('Ese código no es válido. Pídele a tu compañero que use "Copiar configuración" y pega el texto completo.', true);
+      return;
+    }
+    var fd = new FormData();
+    fd.append('owner', parts[0]);
+    fd.append('repo', parts[1]);
+    fd.append('branch', parts[2] || 'main');
+    fd.append('token', parts[3]);
+    onSubmitConfigForm(fd);
+  }
+
   // ---------- Cálculos de reportes ----------
 
   function filteredGastosByPeriod() {
@@ -723,6 +752,16 @@
         '</div>' +
         '<div class="screen-body">' +
           '<p style="color:var(--text-dim);font-size:13px;">Conecta esta app al repositorio de GitHub donde se guardan los gastos de K-PITAL. Solo se hace una vez por dispositivo.</p>' +
+
+          '<div class="card">' +
+            '<label style="margin-top:0;">¿Alguien del equipo ya te compartió un código de configuración?</label>' +
+            '<input id="c-paste" type="text" placeholder="Pega aquí el código"/>' +
+            '<div class="btn-row" style="margin-top:10px;">' +
+              '<button type="button" class="btn btn-primary" data-action="paste-config" ' + (state.configVerifying ? 'disabled' : '') + '>Usar este código y conectar</button>' +
+            '</div>' +
+          '</div>' +
+          '<p style="color:var(--text-dim);font-size:12px;text-align:center;margin:-6px 0 18px;">— o completa los datos manualmente —</p>' +
+
           '<form data-form="config">' +
             '<label for="c-owner">Usuario u organización de GitHub</label>' +
             '<input id="c-owner" name="owner" type="text" required placeholder="Ej: kpital-restaurante" value="' + escapeHtml(cfg.owner || '') + '"/>' +
@@ -746,7 +785,11 @@
               '</button>' +
             '</div>' +
           '</form>' +
-          (state.config ? '<div class="btn-row" style="margin-top:26px;"><button type="button" class="btn btn-secondary btn-danger" data-action="reset-config">Desconectar este dispositivo</button></div>' : '') +
+          (state.config ? (
+            '<div class="btn-row" style="margin-top:26px;"><button type="button" class="btn btn-secondary" data-action="copy-config">Copiar configuración para otro dispositivo</button></div>' +
+            '<div class="field-hint" style="text-align:center;">Comparte ese código solo por un canal seguro (WhatsApp, etc.). Da acceso completo a los gastos de este repositorio.</div>' +
+            '<div class="btn-row" style="margin-top:18px;"><button type="button" class="btn btn-secondary btn-danger" data-action="reset-config">Desconectar este dispositivo</button></div>'
+          ) : '') +
         '</div>' +
       '</div>'
     );
@@ -769,6 +812,8 @@
     else if (action === 'report-tab') { state.reportTab = target.dataset.rt; render(); }
     else if (action === 'reset-config') resetConfig();
     else if (action === 'toggle-token') toggleTokenVisibility();
+    else if (action === 'copy-config') copyConfigForSharing();
+    else if (action === 'paste-config') usePastedConfig();
   });
 
   appEl.addEventListener('submit', function (e) {
