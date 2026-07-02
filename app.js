@@ -43,6 +43,7 @@
     configVerifying: false,
     configError: null,
     showToken: false,
+    deferredInstallPrompt: null,
   };
 
   // ---------- Utilidades ----------
@@ -343,6 +344,33 @@
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) refreshCurrentView();
   });
+
+  // ---------- Instalar como app ----------
+
+  function isIosDevice() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+  }
+  function isStandaloneApp() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  }
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    state.deferredInstallPrompt = e;
+    if (!state.screen) render();
+  });
+  window.addEventListener('appinstalled', function () {
+    state.deferredInstallPrompt = null;
+    if (!state.screen) render();
+  });
+
+  function installApp() {
+    var promptEvent = state.deferredInstallPrompt;
+    if (!promptEvent) return;
+    state.deferredInstallPrompt = null;
+    promptEvent.prompt();
+    promptEvent.userChoice.then(function () { render(); }).catch(function () {});
+  }
 
   function loadInitialData() {
     if (!state.config) return;
@@ -799,8 +827,32 @@
         '<div style="font-size:28px;">&#128202;</div>' +
         '<div style="font-weight:700;margin-top:6px;">Reportes</div>' +
         '<div style="color:var(--text-dim);font-size:12.5px;margin-top:2px;">Totales por período, proveedor y pagado por</div>' +
-      '</div>'
+      '</div>' +
+      renderInstallCard()
     );
+  }
+
+  function renderInstallCard() {
+    if (isStandaloneApp()) return '';
+    if (state.deferredInstallPrompt) {
+      return (
+        '<div class="card" style="text-align:center;padding:18px;cursor:pointer;background:linear-gradient(135deg,rgba(242,181,68,.12),transparent);" data-action="install-app">' +
+          '<div style="font-size:28px;">&#128241;</div>' +
+          '<div style="font-weight:700;margin-top:6px;">Instalar la app</div>' +
+          '<div style="color:var(--text-dim);font-size:12.5px;margin-top:2px;">Agrégala a tu pantalla de inicio para abrirla como una app</div>' +
+        '</div>'
+      );
+    }
+    if (isIosDevice()) {
+      return (
+        '<div class="card" style="text-align:center;padding:18px;">' +
+          '<div style="font-size:28px;">&#128241;</div>' +
+          '<div style="font-weight:700;margin-top:6px;">Instalar en iPhone</div>' +
+          '<div style="color:var(--text-dim);font-size:12.5px;margin-top:2px;">Toca el botón Compartir &#8593; de Safari y elige "Agregar a pantalla de inicio"</div>' +
+        '</div>'
+      );
+    }
+    return '';
   }
 
   function renderRefreshBar() {
@@ -1316,6 +1368,7 @@
     else if (action === 'copy-config') copyConfigForSharing();
     else if (action === 'paste-config') usePastedConfig();
     else if (action === 'download-report-pdf') downloadOrShareReportePdf();
+    else if (action === 'install-app') installApp();
   });
 
   appEl.addEventListener('submit', function (e) {
@@ -1348,4 +1401,8 @@
   if (!state.config) state.screen = 'config';
   render();
   if (state.config) loadInitialData();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  }
 })();
