@@ -31,7 +31,7 @@
     },
     syncStatus: 'idle', // idle | syncing | ok | error
     lastSync: null,
-    tab: 'gastos', // gastos | costo | reportes
+    tab: 'inicio', // inicio | gastos | costo | reportes
     costoTab: 'tiempo', // tiempo | otros
     screen: null, // null | 'form' | 'config' | 'empleado-form' | 'tiempo-form' | 'otro-form'
     editingId: null,
@@ -756,6 +756,8 @@
   function renderTabbar() {
     return (
       '<div class="tabbar"><div class="tabbar-inner">' +
+        '<button class="tab-btn ' + (state.tab === 'inicio' ? 'active' : '') + '" data-action="tab" data-tab="inicio">' +
+          '<span class="ic">&#127968;</span>Inicio</button>' +
         '<button class="tab-btn ' + (state.tab === 'gastos' ? 'active' : '') + '" data-action="tab" data-tab="gastos">' +
           '<span class="ic">&#128179;</span>Gastos</button>' +
         '<button class="tab-btn ' + (state.tab === 'costo' ? 'active' : '') + '" data-action="tab" data-tab="costo">' +
@@ -770,9 +772,35 @@
     if (!state.config) {
       return '<main>' + renderSetupHero() + '</main>';
     }
+    if (state.tab === 'inicio') return '<main>' + renderInicioTab() + '</main>';
     if (state.tab === 'gastos') return '<main>' + renderRefreshBar() + renderGastosTab() + '</main>' + renderFab();
     if (state.tab === 'costo') return '<main>' + renderRefreshBar() + renderCostoOperativoTab() + '</main>';
     return '<main>' + renderRefreshBar() + renderReportesTab() + '</main>';
+  }
+
+  function renderInicioTab() {
+    return (
+      '<div class="setup-hero">' +
+        '<div class="logo-lg">K</div>' +
+        '<h2>Hola 👋</h2>' +
+        '<p>Elige qué quieres hacer.</p>' +
+      '</div>' +
+      '<div class="card" style="text-align:center;padding:18px;cursor:pointer;" data-action="tab" data-tab="gastos">' +
+        '<div style="font-size:28px;">&#128179;</div>' +
+        '<div style="font-weight:700;margin-top:6px;">Gastos</div>' +
+        '<div style="color:var(--text-dim);font-size:12.5px;margin-top:2px;">Registrar y ver facturas de proveedores</div>' +
+      '</div>' +
+      '<div class="card" style="text-align:center;padding:18px;cursor:pointer;" data-action="tab" data-tab="costo">' +
+        '<div style="font-size:28px;">&#129518;</div>' +
+        '<div style="font-weight:700;margin-top:6px;">Costo Operativo</div>' +
+        '<div style="color:var(--text-dim);font-size:12.5px;margin-top:2px;">Horas trabajadas y otros gastos operativos</div>' +
+      '</div>' +
+      '<div class="card" style="text-align:center;padding:18px;cursor:pointer;" data-action="tab" data-tab="reportes">' +
+        '<div style="font-size:28px;">&#128202;</div>' +
+        '<div style="font-weight:700;margin-top:6px;">Reportes</div>' +
+        '<div style="color:var(--text-dim);font-size:12.5px;margin-top:2px;">Totales por período, proveedor y pagado por</div>' +
+      '</div>'
+    );
   }
 
   function renderRefreshBar() {
