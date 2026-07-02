@@ -49,6 +49,7 @@ La lista se actualiza sola cada 20 segundos y también al volver a abrir la app 
 ## Uso
 
 - **Gastos**: botón "+" para registrar un gasto nuevo (fecha, proveedor, monto de la factura y "Pagado por"). Tocar un gasto de la lista lo abre para editarlo o eliminarlo. Los montos se muestran en colones costarricenses (₡).
+  - **Cargar factura por foto**: botón "📷 Cargar factura por foto" para tomar una foto (o elegir una imagen) de una factura. Al tocar "Procesar", la app intenta reconocer automáticamente la fecha, el proveedor y el monto (usando reconocimiento de texto en el propio navegador, sin enviar la imagen a ningún servidor). Siempre se abre el formulario normal con esos datos precargados para revisarlos y corregirlos antes de guardar — el reconocimiento automático no es perfecto.
 - **Costo Operativo**:
   - **Tiempo laborado**: "+ Empleado" para agregar el nombre y sus precios de hora normal/extra. "+ Registrar horas" para elegir un empleado, una fecha y la cantidad de horas normales/extras — la app calcula el monto a pagar automáticamente con las tarifas de ese empleado.
   - **Otros gastos**: registros simples de fecha, concepto y monto para costos operativos que no son ni facturas de proveedor ni horas trabajadas (alquiler, servicios, etc.).

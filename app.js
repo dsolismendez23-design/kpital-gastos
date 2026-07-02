@@ -33,8 +33,10 @@
     lastSync: null,
     tab: 'inicio', // inicio | gastos | costo | reportes
     costoTab: 'tiempo', // tiempo | otros
-    screen: null, // null | 'form' | 'config' | 'empleado-form' | 'tiempo-form' | 'otro-form'
+    screen: null, // null | 'form' | 'config' | 'empleado-form' | 'tiempo-form' | 'otro-form' | 'foto-form'
     editingId: null,
+    formPrefill: null,
+    fotoState: null, // { file, previewUrl, processing, extracted }
     search: '',
     reportTab: 'resumen', // resumen | proveedor | pagado
     period: defaultPeriod(),
@@ -390,12 +392,18 @@
     render();
     ensureLoaded(neededCollectionsForView());
   }
-  function closeScreen() { state.screen = null; state.editingId = null; state.configError = null; render(); }
+  function closeScreen() {
+    if (state.fotoState && state.fotoState.previewUrl) URL.revokeObjectURL(state.fotoState.previewUrl);
+    state.screen = null; state.editingId = null; state.configError = null; state.fotoState = null;
+    render();
+  }
   function openConfig() { state.configError = null; state.screen = 'config'; render(); }
   function toggleTokenVisibility() { state.showToken = !state.showToken; render(); }
 
-  function openNewForm() { state.editingId = null; state.screen = 'form'; render(); }
-  function openEditForm(id) { state.editingId = id; state.screen = 'form'; render(); }
+  function openNewForm(prefill) { state.editingId = null; state.formPrefill = prefill || null; state.screen = 'form'; render(); }
+  function openEditForm(id) { state.editingId = id; state.formPrefill = null; state.screen = 'form'; render(); }
+
+  function openFotoForm() { state.fotoState = { file: null, previewUrl: null, processing: false, extracted: null }; state.screen = 'foto-form'; render(); }
 
   function openNewEmpleadoForm() { state.editingId = null; state.screen = 'empleado-form'; render(); }
   function openEditEmpleadoForm(id) { state.editingId = id; state.screen = 'empleado-form'; render(); }
@@ -668,6 +676,116 @@
     return order.map(function (k) { return map[k]; }).sort(function (a, b) { return a.name < b.name ? 1 : -1; });
   }
 
+  // ---------- Cargar factura por foto (OCR) ----------
+
+  var TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+
+  function loadTesseractScript() {
+    if (window.Tesseract) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = TESSERACT_URL;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('No se pudo cargar el motor de reconocimiento.')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function parseAmountToken(str) {
+    if (!str) return null;
+    var cleaned = str.replace(/[^\d.,]/g, '');
+    if (!cleaned) return null;
+    var lastComma = cleaned.lastIndexOf(','), lastDot = cleaned.lastIndexOf('.');
+    var decSep = lastComma > lastDot ? ',' : (lastDot > lastComma ? '.' : null);
+    var val;
+    if (decSep) {
+      var thouSep = decSep === ',' ? '.' : ',';
+      var segs = cleaned.split(decSep);
+      var decPart = segs.pop();
+      var intPart = segs.join('').split(thouSep).join('');
+      val = parseFloat(intPart + '.' + decPart);
+    } else {
+      val = parseFloat(cleaned.replace(/[.,]/g, ''));
+    }
+    return isNaN(val) ? null : val;
+  }
+
+  function extractInvoiceFields(text) {
+    var lines = text.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+
+    var fecha = null;
+    var reDMY = /(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/;
+    var reYMD = /(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/;
+    for (var i = 0; i < lines.length && !fecha; i++) {
+      var m1 = lines[i].match(reDMY);
+      if (m1) {
+        var mo1 = parseInt(m1[2], 10), d1 = parseInt(m1[1], 10);
+        if (mo1 >= 1 && mo1 <= 12 && d1 >= 1 && d1 <= 31) fecha = m1[3] + '-' + String(mo1).padStart(2, '0') + '-' + String(d1).padStart(2, '0');
+      }
+      if (!fecha) {
+        var m2 = lines[i].match(reYMD);
+        if (m2) {
+          var mo2 = parseInt(m2[2], 10), d2 = parseInt(m2[3], 10);
+          if (mo2 >= 1 && mo2 <= 12 && d2 >= 1 && d2 <= 31) fecha = m2[1] + '-' + String(mo2).padStart(2, '0') + '-' + String(d2).padStart(2, '0');
+        }
+      }
+    }
+
+    var monto = null;
+    var reTotalLine = /total[^0-9]{0,15}([\d][\d.,]*)/i;
+    for (var j = 0; j < lines.length; j++) {
+      var mt = lines[j].match(reTotalLine);
+      if (mt) {
+        var parsed = parseAmountToken(mt[1]);
+        if (parsed != null && parsed > 0) { monto = parsed; break; }
+      }
+    }
+    if (monto == null) {
+      var allNums = text.match(/\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?/g) || [];
+      var parsedNums = allNums.map(parseAmountToken).filter(function (n) { return n != null && n > 0; });
+      if (parsedNums.length) monto = Math.max.apply(null, parsedNums);
+    }
+
+    var proveedor = '';
+    for (var k = 0; k < lines.length; k++) {
+      var l = lines[k];
+      if (l.length >= 3 && /[a-zA-ZÀ-ÿ]{3,}/.test(l) && !/^\d/.test(l)) { proveedor = l; break; }
+    }
+
+    return { fecha: fecha, proveedor: proveedor, monto: monto };
+  }
+
+  function procesarFoto() {
+    if (!state.fotoState || !state.fotoState.file) return;
+    state.fotoState.processing = true;
+    render();
+    loadTesseractScript().then(function () {
+      return Tesseract.recognize(state.fotoState.file, 'spa');
+    }).then(function (result) {
+      var text = (result && result.data && result.data.text) || '';
+      state.fotoState.processing = false;
+      state.fotoState.extracted = extractInvoiceFields(text);
+      render();
+    }).catch(function () {
+      state.fotoState.processing = false;
+      render();
+      showToast('No se pudo procesar la imagen. Intenta con otra foto o ingresa los datos manualmente.', true);
+    });
+  }
+
+  function resetFoto() {
+    if (state.fotoState && state.fotoState.previewUrl) URL.revokeObjectURL(state.fotoState.previewUrl);
+    state.fotoState = { file: null, previewUrl: null, processing: false, extracted: null };
+    render();
+  }
+
+  function continuarConExtraido() {
+    var ex = (state.fotoState && state.fotoState.extracted) || {};
+    if (state.fotoState && state.fotoState.previewUrl) URL.revokeObjectURL(state.fotoState.previewUrl);
+    state.fotoState = null;
+    openNewForm({ fecha: ex.fecha, proveedor: ex.proveedor, monto: ex.monto });
+  }
+
   // ---------- PDF del reporte ----------
 
   function buildReportePdfDoc() {
@@ -891,7 +1009,8 @@
       });
     }
     var totalCount = state.data.gastos.list.length;
-    var html = '<div class="search-row"><input id="search-proveedor" type="text" placeholder="Buscar por proveedor o pagado por…" value="' + escapeHtml(state.search) + '" /></div>';
+    var html = '<div class="btn-row" style="margin-bottom:10px;"><button type="button" class="btn btn-secondary" data-action="open-foto-form">&#128248; Cargar factura por foto</button></div>';
+    html += '<div class="search-row"><input id="search-proveedor" type="text" placeholder="Buscar por proveedor o pagado por…" value="' + escapeHtml(state.search) + '" /></div>';
 
     if (totalCount === 0) {
       html += '<div class="empty-state"><span class="big">&#128221;</span>Aún no hay gastos registrados.<br/>Toca el botón + para agregar el primero.</div>';
@@ -1113,6 +1232,7 @@
     if (state.screen === 'empleado-form') return renderEmpleadoFormScreen();
     if (state.screen === 'tiempo-form') return renderTiempoFormScreen();
     if (state.screen === 'otro-form') return renderOtroFormScreen();
+    if (state.screen === 'foto-form') return renderFotoFormScreen();
     return '';
   }
 
@@ -1131,6 +1251,7 @@
     var proveedores = uniqueValues('proveedor');
     var pagadores = uniqueValues('pagadoPor');
     var today = toISODate(new Date());
+    var prefill = (!editing && state.formPrefill) ? state.formPrefill : null;
 
     return (
       '<div class="screen">' +
@@ -1139,16 +1260,17 @@
           '<h2>' + title + '</h2>' +
         '</div>' +
         '<div class="screen-body">' +
+          (prefill ? '<div class="field-hint" style="background:var(--bg-alt);border:1px solid var(--card-border);border-radius:10px;padding:10px 12px;margin-bottom:14px;">&#128248; Datos detectados de la foto. Revísalos y corrige lo que haga falta antes de guardar.</div>' : '') +
           '<form data-form="gasto">' +
             '<label for="f-fecha">Fecha</label>' +
-            '<input id="f-fecha" name="fecha" type="date" required value="' + escapeHtml(editing ? editing.fecha : today) + '"/>' +
+            '<input id="f-fecha" name="fecha" type="date" required value="' + escapeHtml(editing ? editing.fecha : (prefill && prefill.fecha ? prefill.fecha : today)) + '"/>' +
 
             '<label for="f-proveedor">Nombre del proveedor</label>' +
-            '<input id="f-proveedor" name="proveedor" type="text" required list="lista-proveedores" placeholder="Ej: Distribuidora El Sol" value="' + escapeHtml(editing ? editing.proveedor : '') + '"/>' +
+            '<input id="f-proveedor" name="proveedor" type="text" required list="lista-proveedores" placeholder="Ej: Distribuidora El Sol" value="' + escapeHtml(editing ? editing.proveedor : (prefill ? prefill.proveedor || '' : ''))  + '"/>' +
             '<datalist id="lista-proveedores">' + proveedores.map(function (p) { return '<option value="' + escapeHtml(p) + '">'; }).join('') + '</datalist>' +
 
             '<label for="f-monto">Monto de la factura (₡)</label>' +
-            '<input id="f-monto" name="monto" type="number" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00" value="' + (editing ? editing.monto : '') + '"/>' +
+            '<input id="f-monto" name="monto" type="number" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00" value="' + escapeHtml(editing ? editing.monto : (prefill && prefill.monto != null ? prefill.monto : '')) + '"/>' +
 
             '<label for="f-pagado">Pagado por:</label>' +
             '<input id="f-pagado" name="pagadoPor" type="text" required list="lista-pagadores" placeholder="Ej: Caja chica, Juan Pérez…" value="' + escapeHtml(editing ? editing.pagadoPor : '') + '"/>' +
@@ -1162,6 +1284,53 @@
         '</div>' +
       '</div>'
     );
+  }
+
+  function renderFotoFormScreen() {
+    var fs = state.fotoState || {};
+    var html = (
+      '<div class="screen">' +
+        '<div class="screen-header">' +
+          '<button class="icon-btn" data-action="close-screen">&larr;</button>' +
+          '<h2>Cargar factura por foto</h2>' +
+        '</div>' +
+        '<div class="screen-body">' +
+          '<input id="foto-input" type="file" accept="image/*" capture="environment" style="display:none;"/>'
+    );
+
+    if (!fs.previewUrl) {
+      html += (
+        '<div class="empty-state"><span class="big">&#128248;</span>Toma una foto de la factura o elige una imagen. Luego revisa los datos antes de guardar el gasto.</div>' +
+        '<div class="btn-row"><button type="button" class="btn btn-primary" data-action="trigger-foto-input">&#128247; Tomar foto / elegir imagen</button></div>'
+      );
+    } else {
+      html += '<div class="card" style="text-align:center;"><img src="' + fs.previewUrl + '" style="max-width:100%;max-height:320px;border-radius:10px;"/></div>';
+
+      if (fs.processing) {
+        html += '<div class="empty-state"><span class="spinner" style="border-top-color:var(--accent);width:26px;height:26px;"></span><br/><br/>Procesando imagen, puede tardar unos segundos…</div>';
+      } else if (fs.extracted) {
+        var ex = fs.extracted;
+        html += (
+          '<div class="card">' +
+            '<label style="margin-top:0;">Datos detectados</label>' +
+            '<div class="report-row"><div class="name">Fecha</div><div class="amt">' + (ex.fecha ? escapeHtml(formatDateDisplay(ex.fecha)) : 'No detectada') + '</div></div>' +
+            '<div class="report-row"><div class="name">Proveedor</div><div class="amt">' + (ex.proveedor ? escapeHtml(ex.proveedor) : 'No detectado') + '</div></div>' +
+            '<div class="report-row"><div class="name">Monto</div><div class="amt">' + (ex.monto != null ? escapeHtml(formatMoney(ex.monto)) : 'No detectado') + '</div></div>' +
+          '</div>' +
+          '<div class="field-hint" style="text-align:center;margin-bottom:14px;">El reconocimiento automático puede fallar. En el siguiente paso puedes corregir cualquier dato antes de guardar.</div>' +
+          '<div class="btn-row"><button type="button" class="btn btn-primary" data-action="foto-continuar">Continuar</button></div>' +
+          '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn btn-secondary" data-action="foto-reset">Elegir otra foto</button></div>'
+        );
+      } else {
+        html += (
+          '<div class="btn-row"><button type="button" class="btn btn-primary" data-action="foto-procesar">Procesar</button></div>' +
+          '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn btn-secondary" data-action="foto-reset">Elegir otra foto</button></div>'
+        );
+      }
+    }
+
+    html += '</div></div>';
+    return html;
   }
 
   function renderEmpleadoFormScreen() {
@@ -1369,6 +1538,11 @@
     else if (action === 'paste-config') usePastedConfig();
     else if (action === 'download-report-pdf') downloadOrShareReportePdf();
     else if (action === 'install-app') installApp();
+    else if (action === 'open-foto-form') openFotoForm();
+    else if (action === 'trigger-foto-input') document.getElementById('foto-input').click();
+    else if (action === 'foto-procesar') procesarFoto();
+    else if (action === 'foto-reset') resetFoto();
+    else if (action === 'foto-continuar') continuarConExtraido();
   });
 
   appEl.addEventListener('submit', function (e) {
@@ -1394,6 +1568,15 @@
 
   appEl.addEventListener('change', function (e) {
     if (e.target.id === 'tf-empleado') updateTiempoPreview();
+    else if (e.target.id === 'foto-input') {
+      var f = e.target.files && e.target.files[0];
+      if (!f || !state.fotoState) return;
+      if (state.fotoState.previewUrl) URL.revokeObjectURL(state.fotoState.previewUrl);
+      state.fotoState.file = f;
+      state.fotoState.previewUrl = URL.createObjectURL(f);
+      state.fotoState.extracted = null;
+      render();
+    }
   });
 
   // ---------- Arranque ----------
