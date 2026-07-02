@@ -71,14 +71,16 @@
     return { desde: toISODate(first), hasta: toISODate(now) };
   }
 
-  function formatMoney(n) {
+  function formatMoneyNumber(n) {
     var v = Number(n || 0);
     var sign = v < 0 ? '-' : '';
     var fixed = Math.abs(v).toFixed(2);
     var parts = fixed.split('.');
     var intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-    return sign + '₡' + intPart + ',' + parts[1];
+    return sign + intPart + ',' + parts[1];
   }
+  function formatMoney(n) { return '₡' + formatMoneyNumber(n); }
+  function formatMoneyPdf(n) { return 'CRC ' + formatMoneyNumber(n); }
 
   function formatDateDisplay(iso) {
     if (!iso) return '';
@@ -638,6 +640,73 @@
     return order.map(function (k) { return map[k]; }).sort(function (a, b) { return a.name < b.name ? 1 : -1; });
   }
 
+  // ---------- PDF del reporte ----------
+
+  function buildReportePdfDoc() {
+    var filtered = filteredGastosByPeriod();
+    var total = filtered.reduce(function (s, g) { return s + (Number(g.monto) || 0); }, 0);
+    var porProveedor = groupBy(filtered, 'proveedor');
+    var porPagado = groupBy(filtered, 'pagadoPor');
+    var periodoLabel = (state.period.desde || state.period.hasta)
+      ? ('Periodo: ' + (state.period.desde ? formatDateDisplay(state.period.desde) : 'inicio') + ' a ' + (state.period.hasta ? formatDateDisplay(state.period.hasta) : 'hoy'))
+      : 'Periodo: todos los registros';
+
+    var doc = new jspdf.jsPDF();
+    var y = 20;
+    var pageH = 280;
+
+    function ensureSpace(need) {
+      if (y + need > pageH) { doc.addPage(); y = 20; }
+    }
+
+    doc.setFontSize(16);
+    doc.text('K-PITAL - Reporte de gastos', 14, y); y += 8;
+    doc.setFontSize(10);
+    doc.text(periodoLabel, 14, y); y += 6;
+    doc.text('Generado: ' + new Date().toLocaleString('es-CR'), 14, y); y += 12;
+
+    doc.setFontSize(12);
+    doc.text('Total gastado: ' + formatMoneyPdf(total), 14, y); y += 7;
+    doc.text('Cantidad de facturas: ' + filtered.length, 14, y); y += 7;
+    doc.text('Promedio por factura: ' + formatMoneyPdf(filtered.length ? total / filtered.length : 0), 14, y); y += 12;
+
+    function section(title, rows) {
+      ensureSpace(14);
+      doc.setFontSize(13);
+      doc.text(title, 14, y); y += 8;
+      doc.setFontSize(10);
+      if (!rows.length) { doc.text('Sin datos en este periodo.', 14, y); y += 8; return; }
+      rows.forEach(function (r) {
+        ensureSpace(7);
+        doc.text(String(r.name).slice(0, 45) + '  (' + r.count + ')', 14, y);
+        doc.text(formatMoneyPdf(r.total), 196, y, { align: 'right' });
+        y += 6.5;
+      });
+      y += 6;
+    }
+
+    section('Por proveedor', porProveedor);
+    section('Pagado por', porPagado);
+
+    return doc;
+  }
+
+  function downloadOrShareReportePdf() {
+    if (typeof jspdf === 'undefined') {
+      showToast('No se pudo generar el PDF (sin conexión a internet la primera vez).', true);
+      return;
+    }
+    var doc = buildReportePdfDoc();
+    var filename = 'kpital-reporte-' + toISODate(new Date()) + '.pdf';
+    var blob = doc.output('blob');
+    var file = new File([blob], filename, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Reporte K-PITAL', text: 'Reporte de gastos K-PITAL' }).catch(function () {});
+    } else {
+      doc.save(filename);
+    }
+  }
+
   // ---------- Render ----------
 
   function withFocusPreserved(fn) {
@@ -818,6 +887,7 @@
         '<div class="label">Total gastado en el período</div>' +
         '<div class="summary-sub"><div><b>' + filtered.length + '</b>facturas</div>' +
         '<div><b>' + (filtered.length ? escapeHtml(formatMoney(total / filtered.length)) : formatMoney(0)) + '</b>promedio</div></div>' +
+        '<div style="margin-top:16px;"><button type="button" class="btn btn-secondary" data-action="download-report-pdf">&#128196; Descargar / compartir PDF</button></div>' +
       '</div>'
     );
     html += '</div>';
@@ -1217,6 +1287,7 @@
     else if (action === 'toggle-token') toggleTokenVisibility();
     else if (action === 'copy-config') copyConfigForSharing();
     else if (action === 'paste-config') usePastedConfig();
+    else if (action === 'download-report-pdf') downloadOrShareReportePdf();
   });
 
   appEl.addEventListener('submit', function (e) {
