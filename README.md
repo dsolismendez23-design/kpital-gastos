@@ -48,8 +48,11 @@ La lista se actualiza sola cada 20 segundos y también al volver a abrir la app 
 
 ## Uso
 
-- **Gastos**: botón "+" para registrar un gasto nuevo (fecha, proveedor, monto de la factura y "Pagado por"). Tocar un gasto de la lista lo abre para editarlo o eliminarlo.
-- **Reportes**: elige un período (o usa los atajos "Este mes", "Mes pasado", "Este año", "Todo") y consulta el total general, el desglose por proveedor y el desglose por "Pagado por".
+- **Gastos**: botón "+" para registrar un gasto nuevo (fecha, proveedor, monto de la factura y "Pagado por"). Tocar un gasto de la lista lo abre para editarlo o eliminarlo. Los montos se muestran en colones costarricenses (₡).
+- **Costo Operativo**:
+  - **Tiempo laborado**: "+ Empleado" para agregar el nombre y sus precios de hora normal/extra. "+ Registrar horas" para elegir un empleado, una fecha y la cantidad de horas normales/extras — la app calcula el monto a pagar automáticamente con las tarifas de ese empleado.
+  - **Otros gastos**: registros simples de fecha, concepto y monto para costos operativos que no son ni facturas de proveedor ni horas trabajadas (alquiler, servicios, etc.).
+- **Reportes**: elige un período (o usa los atajos "Este mes", "Mes pasado", "Este año", "Todo") y consulta el total general, el desglose por proveedor y el desglose por "Pagado por" (basado en el módulo Gastos).
 
 ## Notas
 

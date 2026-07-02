@@ -1,5 +1,5 @@
 /* K-PITAL · Gastos
- * App sin frameworks: los datos viven en data/gastos.json dentro de un
+ * App sin frameworks: los datos viven como archivos JSON dentro de un
  * repositorio de GitHub y se leen/escriben con la API REST de GitHub.
  * Cada dispositivo guarda su propia conexión (owner/repo/token) en localStorage.
  */
@@ -10,6 +10,12 @@
   var GH_API = 'https://api.github.com';
   var POLL_MS = 20000;
   var MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var COLLECTIONS = {
+    gastos: 'data/gastos.json',
+    empleados: 'data/empleados.json',
+    tiempo: 'data/tiempo_laborado.json',
+    otros: 'data/otros_gastos.json',
+  };
 
   var appEl = document.getElementById('app');
   var pollTimer = null;
@@ -17,12 +23,17 @@
 
   var state = {
     config: loadConfig(),
-    gastos: [],
-    sha: null,
+    data: {
+      gastos: { list: [], sha: null, loaded: false },
+      empleados: { list: [], sha: null, loaded: false },
+      tiempo: { list: [], sha: null, loaded: false },
+      otros: { list: [], sha: null, loaded: false },
+    },
     syncStatus: 'idle', // idle | syncing | ok | error
     lastSync: null,
-    tab: 'gastos', // gastos | reportes
-    screen: null, // null | 'form' | 'config'
+    tab: 'gastos', // gastos | costo | reportes
+    costoTab: 'tiempo', // tiempo | otros
+    screen: null, // null | 'form' | 'config' | 'empleado-form' | 'tiempo-form' | 'otro-form'
     editingId: null,
     search: '',
     reportTab: 'resumen', // resumen | proveedor | pagado
@@ -62,7 +73,11 @@
 
   function formatMoney(n) {
     var v = Number(n || 0);
-    return '$' + v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    var sign = v < 0 ? '-' : '';
+    var fixed = Math.abs(v).toFixed(2);
+    var parts = fixed.split('.');
+    var intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return sign + '₡' + intPart + ',' + parts[1];
   }
 
   function formatDateDisplay(iso) {
@@ -118,7 +133,7 @@
     return new TextDecoder().decode(bytes);
   }
 
-  // ---------- API de GitHub ----------
+  // ---------- API de GitHub (genérica por colección) ----------
 
   function ApiError(status, message) {
     this.status = status;
@@ -140,9 +155,11 @@
     return res.json().catch(function () { return null; });
   }
 
-  function fetchGastos(cfg) {
+  function fetchCollection(name) {
+    var cfg = state.config;
+    var path = COLLECTIONS[name];
     var url = '/repos/' + encodeURIComponent(cfg.owner) + '/' + encodeURIComponent(cfg.repo) +
-      '/contents/' + cfg.path + '?ref=' + encodeURIComponent(cfg.branch);
+      '/contents/' + path + '?ref=' + encodeURIComponent(cfg.branch);
     return ghRequest(cfg, url).then(function (res) {
       if (res.status === 404) return { list: [], sha: null };
       if (!res.ok) {
@@ -159,10 +176,12 @@
     });
   }
 
-  function saveGastos(cfg, list, sha) {
-    var url = '/repos/' + encodeURIComponent(cfg.owner) + '/' + encodeURIComponent(cfg.repo) + '/contents/' + cfg.path;
+  function saveCollection(name, list, sha) {
+    var cfg = state.config;
+    var path = COLLECTIONS[name];
+    var url = '/repos/' + encodeURIComponent(cfg.owner) + '/' + encodeURIComponent(cfg.repo) + '/contents/' + path;
     var body = {
-      message: 'Actualiza gastos (K-PITAL app)',
+      message: 'Actualiza ' + name + ' (K-PITAL app)',
       content: utf8ToBase64(JSON.stringify(list, null, 2)),
       branch: cfg.branch,
     };
@@ -191,17 +210,18 @@
     return 'No se pudo conectar. Revisa tu conexión a internet.';
   }
 
-  function mutateGastos(mutatorFn, opts) {
+  function mutateCollection(name, mutatorFn, opts) {
     opts = opts || {};
     setSyncStatus('syncing');
     var attempt = 0;
     function tryOnce() {
       attempt++;
-      return fetchGastos(state.config).then(function (data) {
-        var updated = mutatorFn(data.list.slice());
-        return saveGastos(state.config, updated, data.sha).then(function (newSha) {
-          state.gastos = updated;
-          state.sha = newSha;
+      return fetchCollection(name).then(function (res) {
+        var updated = mutatorFn(res.list.slice());
+        return saveCollection(name, updated, res.sha).then(function (newSha) {
+          state.data[name].list = updated;
+          state.data[name].sha = newSha;
+          state.data[name].loaded = true;
           state.lastSync = new Date();
           setSyncStatus('ok');
           if (opts.onSuccess) opts.onSuccess();
@@ -237,32 +257,51 @@
     scheduleToastClear();
   }
 
-  // ---------- Sincronización en segundo plano ----------
+  // ---------- Carga y sincronización (según la vista activa) ----------
 
-  function loadInitialData() {
-    if (!state.config) return;
+  function neededCollectionsForView() {
+    if (state.tab === 'gastos') return ['gastos'];
+    if (state.tab === 'reportes') return ['gastos'];
+    if (state.tab === 'costo') return state.costoTab === 'tiempo' ? ['empleados', 'tiempo'] : ['otros'];
+    return [];
+  }
+
+  function ensureLoaded(names) {
+    var toFetch = names.filter(function (n) { return !state.data[n].loaded; });
+    if (!toFetch.length) { restartPollingForCurrentView(); return Promise.resolve(); }
     setSyncStatus('syncing');
     render();
-    fetchGastos(state.config).then(function (data) {
-      state.gastos = data.list;
-      state.sha = data.sha;
+    return Promise.all(toFetch.map(function (n) {
+      return fetchCollection(n).then(function (res) {
+        state.data[n].list = res.list;
+        state.data[n].sha = res.sha;
+        state.data[n].loaded = true;
+      });
+    })).then(function () {
       state.lastSync = new Date();
       setSyncStatus('ok');
       render();
-      startPolling();
+      restartPollingForCurrentView();
     }).catch(function (e) {
       setSyncStatus('error');
       showToast(friendlyError(e), true);
+      restartPollingForCurrentView();
     });
   }
 
-  function refresh() {
+  function refreshCurrentView() {
     if (!state.config) return Promise.resolve();
+    var names = neededCollectionsForView();
+    if (!names.length) return Promise.resolve();
     setSyncStatus('syncing');
     updateSyncDomOnly();
-    return fetchGastos(state.config).then(function (data) {
-      state.gastos = data.list;
-      state.sha = data.sha;
+    return Promise.all(names.map(function (n) {
+      return fetchCollection(n).then(function (res) {
+        state.data[n].list = res.list;
+        state.data[n].sha = res.sha;
+        state.data[n].loaded = true;
+      });
+    })).then(function () {
       state.lastSync = new Date();
       setSyncStatus('ok');
       backgroundDataUpdated();
@@ -293,24 +332,52 @@
     return timeAgo(state.lastSync);
   }
 
-  function startPolling() {
+  function restartPollingForCurrentView() {
     stopPolling();
-    pollTimer = setInterval(function () { if (!document.hidden) refresh(); }, POLL_MS);
+    pollTimer = setInterval(function () { if (!document.hidden) refreshCurrentView(); }, POLL_MS);
   }
   function stopPolling() { if (pollTimer) clearInterval(pollTimer); }
 
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) refresh();
+    if (!document.hidden) refreshCurrentView();
   });
 
-  // ---------- Acciones de usuario ----------
+  function loadInitialData() {
+    if (!state.config) return;
+    ensureLoaded(neededCollectionsForView());
+  }
 
-  function switchTab(tab) { state.tab = tab; state.screen = null; render(); }
-  function openNewForm() { state.editingId = null; state.screen = 'form'; render(); }
-  function openEditForm(id) { state.editingId = id; state.screen = 'form'; render(); }
+  // ---------- Acciones de usuario: navegación ----------
+
+  function switchTab(tab) {
+    state.tab = tab;
+    state.screen = null;
+    render();
+    ensureLoaded(neededCollectionsForView());
+  }
+  function switchCostoTab(ct) {
+    state.costoTab = ct;
+    render();
+    ensureLoaded(neededCollectionsForView());
+  }
   function closeScreen() { state.screen = null; state.editingId = null; state.configError = null; render(); }
   function openConfig() { state.configError = null; state.screen = 'config'; render(); }
   function toggleTokenVisibility() { state.showToken = !state.showToken; render(); }
+
+  function openNewForm() { state.editingId = null; state.screen = 'form'; render(); }
+  function openEditForm(id) { state.editingId = id; state.screen = 'form'; render(); }
+
+  function openNewEmpleadoForm() { state.editingId = null; state.screen = 'empleado-form'; render(); }
+  function openEditEmpleadoForm(id) { state.editingId = id; state.screen = 'empleado-form'; render(); }
+
+  function openNewTiempoForm() {
+    if (!state.data.empleados.list.length) { showToast('Primero agrega al menos un empleado.', true); return; }
+    state.editingId = null; state.screen = 'tiempo-form'; render();
+  }
+  function openEditTiempoForm(id) { state.editingId = id; state.screen = 'tiempo-form'; render(); }
+
+  function openNewOtroForm() { state.editingId = null; state.screen = 'otro-form'; render(); }
+  function openEditOtroForm(id) { state.editingId = id; state.screen = 'otro-form'; render(); }
 
   function setQuickPeriod(kind) {
     var now = new Date(), desde, hasta;
@@ -323,9 +390,11 @@
     render();
   }
 
+  // ---------- Acciones de usuario: guardar/eliminar ----------
+
   function deleteGasto(id) {
     if (!window.confirm('¿Eliminar este gasto? Esta acción no se puede deshacer.')) return;
-    mutateGastos(function (list) { return list.filter(function (g) { return g.id !== id; }); }, {
+    mutateCollection('gastos', function (list) { return list.filter(function (g) { return g.id !== id; }); }, {
       successMessage: 'Gasto eliminado',
       onSuccess: function () { state.screen = null; state.editingId = null; },
     });
@@ -341,7 +410,7 @@
       return;
     }
     var editingId = state.editingId;
-    mutateGastos(function (list) {
+    mutateCollection('gastos', function (list) {
       if (editingId) {
         return list.map(function (g) {
           return g.id === editingId ? Object.assign({}, g, { fecha: fecha, proveedor: proveedor, monto: monto, pagadoPor: pagadoPor }) : g;
@@ -354,6 +423,108 @@
     });
   }
 
+  function deleteEmpleado(id) {
+    if (!window.confirm('¿Eliminar este empleado? Los registros de horas ya guardados no se borran.')) return;
+    mutateCollection('empleados', function (list) { return list.filter(function (e) { return e.id !== id; }); }, {
+      successMessage: 'Empleado eliminado',
+      onSuccess: function () { state.screen = null; state.editingId = null; },
+    });
+  }
+
+  function onSubmitEmpleadoForm(fd) {
+    var nombre = (fd.get('nombre') || '').trim();
+    var precioHoraNormal = parseFloat(fd.get('precioHoraNormal'));
+    var precioHoraExtra = parseFloat(fd.get('precioHoraExtra'));
+    if (isNaN(precioHoraExtra)) precioHoraExtra = 0;
+    if (!nombre || isNaN(precioHoraNormal) || precioHoraNormal <= 0 || precioHoraExtra < 0) {
+      showToast('Completa el nombre y un precio de hora normal válido (mayor a 0).', true);
+      return;
+    }
+    var editingId = state.editingId;
+    mutateCollection('empleados', function (list) {
+      if (editingId) {
+        return list.map(function (e) {
+          return e.id === editingId ? Object.assign({}, e, { nombre: nombre, precioHoraNormal: precioHoraNormal, precioHoraExtra: precioHoraExtra }) : e;
+        });
+      }
+      return list.concat([{ id: genId(), nombre: nombre, precioHoraNormal: precioHoraNormal, precioHoraExtra: precioHoraExtra, creadoEn: new Date().toISOString() }]);
+    }, {
+      successMessage: editingId ? 'Empleado actualizado' : 'Empleado guardado',
+      onSuccess: function () { state.screen = null; state.editingId = null; },
+    });
+  }
+
+  function deleteTiempo(id) {
+    if (!window.confirm('¿Eliminar este registro de horas? Esta acción no se puede deshacer.')) return;
+    mutateCollection('tiempo', function (list) { return list.filter(function (t) { return t.id !== id; }); }, {
+      successMessage: 'Registro eliminado',
+      onSuccess: function () { state.screen = null; state.editingId = null; },
+    });
+  }
+
+  function onSubmitTiempoForm(fd) {
+    var empleadoId = fd.get('empleadoId');
+    var fecha = fd.get('fecha');
+    var horasNormales = parseFloat(fd.get('horasNormales')) || 0;
+    var horasExtras = parseFloat(fd.get('horasExtras')) || 0;
+    var emp = state.data.empleados.list.find(function (e) { return e.id === empleadoId; });
+    if (!emp || !fecha || (horasNormales <= 0 && horasExtras <= 0)) {
+      showToast('Selecciona un empleado, una fecha y al menos una cantidad de horas.', true);
+      return;
+    }
+    var monto = horasNormales * Number(emp.precioHoraNormal || 0) + horasExtras * Number(emp.precioHoraExtra || 0);
+    var editingId = state.editingId;
+    var payload = {
+      empleadoId: empleadoId,
+      empleadoNombre: emp.nombre,
+      fecha: fecha,
+      horasNormales: horasNormales,
+      horasExtras: horasExtras,
+      precioHoraNormal: emp.precioHoraNormal,
+      precioHoraExtra: emp.precioHoraExtra,
+      monto: monto,
+    };
+    mutateCollection('tiempo', function (list) {
+      if (editingId) {
+        return list.map(function (t) { return t.id === editingId ? Object.assign({}, t, payload) : t; });
+      }
+      return list.concat([Object.assign({ id: genId(), creadoEn: new Date().toISOString() }, payload)]);
+    }, {
+      successMessage: editingId ? 'Registro actualizado' : 'Registro guardado',
+      onSuccess: function () { state.screen = null; state.editingId = null; },
+    });
+  }
+
+  function deleteOtro(id) {
+    if (!window.confirm('¿Eliminar este gasto operativo? Esta acción no se puede deshacer.')) return;
+    mutateCollection('otros', function (list) { return list.filter(function (o) { return o.id !== id; }); }, {
+      successMessage: 'Gasto eliminado',
+      onSuccess: function () { state.screen = null; state.editingId = null; },
+    });
+  }
+
+  function onSubmitOtroForm(fd) {
+    var fecha = fd.get('fecha');
+    var concepto = (fd.get('concepto') || '').trim();
+    var monto = parseFloat(fd.get('monto'));
+    if (!fecha || !concepto || isNaN(monto) || monto <= 0) {
+      showToast('Completa fecha, concepto y un monto válido (mayor a 0).', true);
+      return;
+    }
+    var editingId = state.editingId;
+    mutateCollection('otros', function (list) {
+      if (editingId) {
+        return list.map(function (o) { return o.id === editingId ? Object.assign({}, o, { fecha: fecha, concepto: concepto, monto: monto }) : o; });
+      }
+      return list.concat([{ id: genId(), fecha: fecha, concepto: concepto, monto: monto, creadoEn: new Date().toISOString() }]);
+    }, {
+      successMessage: editingId ? 'Gasto actualizado' : 'Gasto guardado',
+      onSuccess: function () { state.screen = null; state.editingId = null; },
+    });
+  }
+
+  // ---------- Configuración ----------
+
   function onSubmitConfigForm(fd) {
     var owner = (fd.get('owner') || '').trim();
     var repo = (fd.get('repo') || '').trim();
@@ -364,23 +535,24 @@
       render();
       return;
     }
-    var testConfig = { owner: owner, repo: repo, branch: branch, token: token, path: 'data/gastos.json' };
+    var testConfig = { owner: owner, repo: repo, branch: branch, token: token };
     var prevConfig = state.config;
     state.configVerifying = true;
     state.configError = null;
     state.config = testConfig;
     render();
-    fetchGastos(testConfig).then(function (data) {
+    fetchCollection('gastos').then(function (data) {
       persistConfig(testConfig);
-      state.gastos = data.list;
-      state.sha = data.sha;
+      state.data.gastos.list = data.list;
+      state.data.gastos.sha = data.sha;
+      state.data.gastos.loaded = true;
       state.lastSync = new Date();
       state.syncStatus = 'ok';
       state.configVerifying = false;
       state.screen = null;
       render();
       showToast('Conectado correctamente');
-      startPolling();
+      restartPollingForCurrentView();
     }).catch(function (e) {
       state.config = prevConfig;
       state.configVerifying = false;
@@ -394,8 +566,12 @@
     clearConfig();
     stopPolling();
     state.config = null;
-    state.gastos = [];
-    state.sha = null;
+    state.data = {
+      gastos: { list: [], sha: null, loaded: false },
+      empleados: { list: [], sha: null, loaded: false },
+      tiempo: { list: [], sha: null, loaded: false },
+      otros: { list: [], sha: null, loaded: false },
+    };
     state.screen = 'config';
     render();
   }
@@ -429,11 +605,11 @@
     onSubmitConfigForm(fd);
   }
 
-  // ---------- Cálculos de reportes ----------
+  // ---------- Cálculos de reportes (Gastos) ----------
 
   function filteredGastosByPeriod() {
     var desde = state.period.desde, hasta = state.period.hasta;
-    return state.gastos.filter(function (g) {
+    return state.data.gastos.list.filter(function (g) {
       if (desde && g.fecha < desde) return false;
       if (hasta && g.fecha > hasta) return false;
       return true;
@@ -485,6 +661,7 @@
 
   function paint() {
     appEl.innerHTML = renderHeader() + renderMain() + renderTabbar() + renderScreen() + renderToast();
+    updateTiempoPreview();
   }
 
   function renderHeader() {
@@ -512,6 +689,8 @@
       '<div class="tabbar"><div class="tabbar-inner">' +
         '<button class="tab-btn ' + (state.tab === 'gastos' ? 'active' : '') + '" data-action="tab" data-tab="gastos">' +
           '<span class="ic">&#128179;</span>Gastos</button>' +
+        '<button class="tab-btn ' + (state.tab === 'costo' ? 'active' : '') + '" data-action="tab" data-tab="costo">' +
+          '<span class="ic">&#129518;</span>Costo Operativo</button>' +
         '<button class="tab-btn ' + (state.tab === 'reportes' ? 'active' : '') + '" data-action="tab" data-tab="reportes">' +
           '<span class="ic">&#128202;</span>Reportes</button>' +
       '</div></div>'
@@ -523,6 +702,7 @@
       return '<main>' + renderSetupHero() + '</main>';
     }
     if (state.tab === 'gastos') return '<main>' + renderRefreshBar() + renderGastosTab() + '</main>' + renderFab();
+    if (state.tab === 'costo') return '<main>' + renderRefreshBar() + renderCostoOperativoTab() + '</main>';
     return '<main>' + renderRefreshBar() + renderReportesTab() + '</main>';
   }
 
@@ -554,14 +734,14 @@
 
   function renderGastosTab() {
     var search = state.search.trim().toLowerCase();
-    var list = state.gastos.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || '') || (b.creadoEn || '').localeCompare(a.creadoEn || ''); });
+    var list = state.data.gastos.list.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || '') || (b.creadoEn || '').localeCompare(a.creadoEn || ''); });
     if (search) {
       list = list.filter(function (g) {
         return (g.proveedor || '').toLowerCase().indexOf(search) !== -1 ||
                (g.pagadoPor || '').toLowerCase().indexOf(search) !== -1;
       });
     }
-    var totalCount = state.gastos.length;
+    var totalCount = state.data.gastos.list.length;
     var html = '<div class="search-row"><input id="search-proveedor" type="text" placeholder="Buscar por proveedor o pagado por…" value="' + escapeHtml(state.search) + '" /></div>';
 
     if (totalCount === 0) {
@@ -637,7 +817,7 @@
         '<div class="amount">' + escapeHtml(formatMoney(total)) + '</div>' +
         '<div class="label">Total gastado en el período</div>' +
         '<div class="summary-sub"><div><b>' + filtered.length + '</b>facturas</div>' +
-        '<div><b>' + (filtered.length ? escapeHtml(formatMoney(total / filtered.length)) : '$0.00') + '</b>promedio</div></div>' +
+        '<div><b>' + (filtered.length ? escapeHtml(formatMoney(total / filtered.length)) : formatMoney(0)) + '</b>promedio</div></div>' +
       '</div>'
     );
     html += '</div>';
@@ -681,22 +861,114 @@
     return html;
   }
 
+  // ---------- Costo Operativo ----------
+
+  function renderCostoOperativoTab() {
+    var html = (
+      '<div class="segmented">' +
+        '<button class="' + (state.costoTab === 'tiempo' ? 'active' : '') + '" data-action="costo-tab" data-ct="tiempo">Tiempo laborado</button>' +
+        '<button class="' + (state.costoTab === 'otros' ? 'active' : '') + '" data-action="costo-tab" data-ct="otros">Otros gastos</button>' +
+      '</div>'
+    );
+    html += state.costoTab === 'tiempo' ? renderTiempoLaboradoView() : renderOtrosGastosView();
+    return html;
+  }
+
+  function renderTiempoLaboradoView() {
+    var tiempoList = state.data.tiempo.list.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
+    var empleados = state.data.empleados.list;
+
+    var html = '<div class="btn-row" style="margin-bottom:14px;">' +
+      '<button type="button" class="btn btn-secondary" data-action="open-empleado-new">+ Empleado</button>' +
+      '<button type="button" class="btn btn-primary" data-action="open-tiempo-new">+ Registrar horas</button>' +
+    '</div>';
+
+    if (!tiempoList.length) {
+      html += '<div class="empty-state"><span class="big">&#9203;</span>Aún no hay horas registradas.</div>';
+    } else {
+      html += '<div class="card">';
+      html += tiempoList.map(renderTiempoItem).join('');
+      html += '</div>';
+    }
+
+    html += '<label style="margin:22px 0 6px;">Empleados registrados</label>';
+    if (!empleados.length) {
+      html += '<div class="empty-state"><span class="big">&#128100;</span>Aún no hay empleados. Toca "+ Empleado" para agregar el primero.</div>';
+    } else {
+      html += '<div class="card">';
+      html += empleados.map(renderEmpleadoItem).join('');
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function renderTiempoItem(t) {
+    return (
+      '<div class="gasto-item" data-action="edit-tiempo" data-id="' + escapeHtml(t.id) + '">' +
+        '<div class="left">' +
+          '<div class="proveedor">' + escapeHtml(t.empleadoNombre) + '</div>' +
+          '<div class="meta">' + escapeHtml(formatDateDisplay(t.fecha)) + ' · ' + Number(t.horasNormales || 0) + 'h normales, ' + Number(t.horasExtras || 0) + 'h extra</div>' +
+        '</div>' +
+        '<div class="monto">' + escapeHtml(formatMoney(t.monto)) + '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderEmpleadoItem(e) {
+    return (
+      '<div class="gasto-item" data-action="edit-empleado" data-id="' + escapeHtml(e.id) + '">' +
+        '<div class="left">' +
+          '<div class="proveedor">' + escapeHtml(e.nombre) + '</div>' +
+          '<div class="meta">Hora normal: ' + escapeHtml(formatMoney(e.precioHoraNormal)) + ' · Hora extra: ' + escapeHtml(formatMoney(e.precioHoraExtra)) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderOtrosGastosView() {
+    var list = state.data.otros.list.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
+    var html = '<div class="btn-row" style="margin-bottom:14px;">' +
+      '<button type="button" class="btn btn-primary" data-action="open-otro-new">+ Nuevo gasto operativo</button>' +
+    '</div>';
+    if (!list.length) {
+      html += '<div class="empty-state"><span class="big">&#128221;</span>Aún no hay gastos operativos registrados.</div>';
+      return html;
+    }
+    html += '<div class="card">';
+    html += list.map(function (o) {
+      return (
+        '<div class="gasto-item" data-action="edit-otro" data-id="' + escapeHtml(o.id) + '">' +
+          '<div class="left">' +
+            '<div class="proveedor">' + escapeHtml(o.concepto) + '</div>' +
+            '<div class="meta">' + escapeHtml(formatDateDisplay(o.fecha)) + '</div>' +
+          '</div>' +
+          '<div class="monto">' + escapeHtml(formatMoney(o.monto)) + '</div>' +
+        '</div>'
+      );
+    }).join('');
+    html += '</div>';
+    return html;
+  }
+
   function renderToast() {
     if (!state.toast) return '';
     return '<div class="toast ' + (state.toast.isError ? 'error' : '') + '">' + escapeHtml(state.toast.msg) + '</div>';
   }
 
-  // ---------- Screens (formulario / configuración) ----------
+  // ---------- Screens (formularios / configuración) ----------
 
   function renderScreen() {
     if (state.screen === 'form') return renderFormScreen();
     if (state.screen === 'config') return renderConfigScreen();
+    if (state.screen === 'empleado-form') return renderEmpleadoFormScreen();
+    if (state.screen === 'tiempo-form') return renderTiempoFormScreen();
+    if (state.screen === 'otro-form') return renderOtroFormScreen();
     return '';
   }
 
   function uniqueValues(key) {
     var seen = {}, out = [];
-    state.gastos.forEach(function (g) {
+    state.data.gastos.list.forEach(function (g) {
       var v = g[key];
       if (v && !seen[v]) { seen[v] = true; out.push(v); }
     });
@@ -704,7 +976,7 @@
   }
 
   function renderFormScreen() {
-    var editing = state.editingId ? state.gastos.find(function (g) { return g.id === state.editingId; }) : null;
+    var editing = state.editingId ? state.data.gastos.list.find(function (g) { return g.id === state.editingId; }) : null;
     var title = editing ? 'Editar gasto' : 'Nuevo gasto';
     var proveedores = uniqueValues('proveedor');
     var pagadores = uniqueValues('pagadoPor');
@@ -725,7 +997,7 @@
             '<input id="f-proveedor" name="proveedor" type="text" required list="lista-proveedores" placeholder="Ej: Distribuidora El Sol" value="' + escapeHtml(editing ? editing.proveedor : '') + '"/>' +
             '<datalist id="lista-proveedores">' + proveedores.map(function (p) { return '<option value="' + escapeHtml(p) + '">'; }).join('') + '</datalist>' +
 
-            '<label for="f-monto">Monto de la factura</label>' +
+            '<label for="f-monto">Monto de la factura (₡)</label>' +
             '<input id="f-monto" name="monto" type="number" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00" value="' + (editing ? editing.monto : '') + '"/>' +
 
             '<label for="f-pagado">Pagado por:</label>' +
@@ -742,6 +1014,127 @@
     );
   }
 
+  function renderEmpleadoFormScreen() {
+    var editing = state.editingId ? state.data.empleados.list.find(function (e) { return e.id === state.editingId; }) : null;
+    var title = editing ? 'Editar empleado' : 'Nuevo empleado';
+    return (
+      '<div class="screen">' +
+        '<div class="screen-header">' +
+          '<button class="icon-btn" data-action="close-screen">&larr;</button>' +
+          '<h2>' + title + '</h2>' +
+        '</div>' +
+        '<div class="screen-body">' +
+          '<form data-form="empleado">' +
+            '<label for="e-nombre">Nombre del empleado</label>' +
+            '<input id="e-nombre" name="nombre" type="text" required placeholder="Ej: Juan Pérez" value="' + escapeHtml(editing ? editing.nombre : '') + '"/>' +
+
+            '<label for="e-normal">Precio hora normal (₡)</label>' +
+            '<input id="e-normal" name="precioHoraNormal" type="number" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00" value="' + (editing ? editing.precioHoraNormal : '') + '"/>' +
+
+            '<label for="e-extra">Precio hora extra (₡)</label>' +
+            '<input id="e-extra" name="precioHoraExtra" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00" value="' + (editing ? editing.precioHoraExtra : '') + '"/>' +
+
+            '<div class="btn-row" style="margin-top:22px;">' +
+              '<button type="submit" class="btn btn-primary">Guardar</button>' +
+            '</div>' +
+            (editing ? '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn btn-danger" data-action="delete-empleado" data-id="' + escapeHtml(editing.id) + '">Eliminar empleado</button></div>' : '') +
+          '</form>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderTiempoFormScreen() {
+    var editing = state.editingId ? state.data.tiempo.list.find(function (t) { return t.id === state.editingId; }) : null;
+    var title = editing ? 'Editar registro de horas' : 'Registrar horas';
+    var empleados = state.data.empleados.list;
+    var selectedId = editing ? editing.empleadoId : (empleados[0] ? empleados[0].id : '');
+    var today = toISODate(new Date());
+
+    var options = empleados.map(function (e) {
+      var sel = e.id === selectedId ? 'selected' : '';
+      return '<option value="' + escapeHtml(e.id) + '" data-normal="' + e.precioHoraNormal + '" data-extra="' + e.precioHoraExtra + '" ' + sel + '>' + escapeHtml(e.nombre) + '</option>';
+    }).join('');
+
+    return (
+      '<div class="screen">' +
+        '<div class="screen-header">' +
+          '<button class="icon-btn" data-action="close-screen">&larr;</button>' +
+          '<h2>' + title + '</h2>' +
+        '</div>' +
+        '<div class="screen-body">' +
+          '<form data-form="tiempo">' +
+            '<label for="tf-empleado">Empleado</label>' +
+            '<select id="tf-empleado" name="empleadoId">' + options + '</select>' +
+
+            '<label for="tf-fecha">Fecha</label>' +
+            '<input id="tf-fecha" name="fecha" type="date" required value="' + escapeHtml(editing ? editing.fecha : today) + '"/>' +
+
+            '<label for="tf-normales">Cantidad de horas normales</label>' +
+            '<input id="tf-normales" name="horasNormales" type="number" step="0.25" min="0" inputmode="decimal" placeholder="0" value="' + (editing ? editing.horasNormales : '') + '"/>' +
+
+            '<label for="tf-extras">Cantidad de horas extras</label>' +
+            '<input id="tf-extras" name="horasExtras" type="number" step="0.25" min="0" inputmode="decimal" placeholder="0" value="' + (editing ? editing.horasExtras : '') + '"/>' +
+
+            '<div class="summary-total" style="padding:16px 10px 0;">' +
+              '<div class="amount" id="tf-preview" style="font-size:24px;">' + escapeHtml(formatMoney(editing ? editing.monto : 0)) + '</div>' +
+              '<div class="label">Monto a pagar</div>' +
+            '</div>' +
+
+            '<div class="btn-row" style="margin-top:22px;">' +
+              '<button type="submit" class="btn btn-primary">Guardar</button>' +
+            '</div>' +
+            (editing ? '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn btn-danger" data-action="delete-tiempo" data-id="' + escapeHtml(editing.id) + '">Eliminar registro</button></div>' : '') +
+          '</form>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function updateTiempoPreview() {
+    if (state.screen !== 'tiempo-form') return;
+    var select = document.getElementById('tf-empleado');
+    var preview = document.getElementById('tf-preview');
+    if (!select || !preview) return;
+    var opt = select.options[select.selectedIndex];
+    var normal = opt ? parseFloat(opt.getAttribute('data-normal')) || 0 : 0;
+    var extra = opt ? parseFloat(opt.getAttribute('data-extra')) || 0 : 0;
+    var hn = parseFloat(document.getElementById('tf-normales').value) || 0;
+    var he = parseFloat(document.getElementById('tf-extras').value) || 0;
+    preview.textContent = formatMoney(hn * normal + he * extra);
+  }
+
+  function renderOtroFormScreen() {
+    var editing = state.editingId ? state.data.otros.list.find(function (o) { return o.id === state.editingId; }) : null;
+    var title = editing ? 'Editar gasto operativo' : 'Nuevo gasto operativo';
+    var today = toISODate(new Date());
+    return (
+      '<div class="screen">' +
+        '<div class="screen-header">' +
+          '<button class="icon-btn" data-action="close-screen">&larr;</button>' +
+          '<h2>' + title + '</h2>' +
+        '</div>' +
+        '<div class="screen-body">' +
+          '<form data-form="otro">' +
+            '<label for="o-fecha">Fecha</label>' +
+            '<input id="o-fecha" name="fecha" type="date" required value="' + escapeHtml(editing ? editing.fecha : today) + '"/>' +
+
+            '<label for="o-concepto">Concepto</label>' +
+            '<input id="o-concepto" name="concepto" type="text" required placeholder="Ej: Alquiler, electricidad…" value="' + escapeHtml(editing ? editing.concepto : '') + '"/>' +
+
+            '<label for="o-monto">Monto (₡)</label>' +
+            '<input id="o-monto" name="monto" type="number" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00" value="' + (editing ? editing.monto : '') + '"/>' +
+
+            '<div class="btn-row" style="margin-top:22px;">' +
+              '<button type="submit" class="btn btn-primary">Guardar</button>' +
+            '</div>' +
+            (editing ? '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn btn-danger" data-action="delete-otro" data-id="' + escapeHtml(editing.id) + '">Eliminar gasto</button></div>' : '') +
+          '</form>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderConfigScreen() {
     var cfg = state.config || {};
     return (
@@ -751,7 +1144,7 @@
           '<h2>Configuración</h2>' +
         '</div>' +
         '<div class="screen-body">' +
-          '<p style="color:var(--text-dim);font-size:13px;">Conecta esta app al repositorio de GitHub donde se guardan los gastos de K-PITAL. Solo se hace una vez por dispositivo.</p>' +
+          '<p style="color:var(--text-dim);font-size:13px;">Conecta esta app al repositorio de GitHub donde se guardan los datos de K-PITAL. Solo se hace una vez por dispositivo.</p>' +
 
           '<div class="card">' +
             '<label style="margin-top:0;">¿Alguien del equipo ya te compartió un código de configuración?</label>' +
@@ -787,7 +1180,7 @@
           '</form>' +
           (state.config ? (
             '<div class="btn-row" style="margin-top:26px;"><button type="button" class="btn btn-secondary" data-action="copy-config">Copiar configuración para otro dispositivo</button></div>' +
-            '<div class="field-hint" style="text-align:center;">Comparte ese código solo por un canal seguro (WhatsApp, etc.). Da acceso completo a los gastos de este repositorio.</div>' +
+            '<div class="field-hint" style="text-align:center;">Comparte ese código solo por un canal seguro (WhatsApp, etc.). Da acceso completo a los datos de este repositorio.</div>' +
             '<div class="btn-row" style="margin-top:18px;"><button type="button" class="btn btn-secondary btn-danger" data-action="reset-config">Desconectar este dispositivo</button></div>'
           ) : '') +
         '</div>' +
@@ -802,12 +1195,22 @@
     if (!target) return;
     var action = target.dataset.action;
     if (action === 'tab') switchTab(target.dataset.tab);
+    else if (action === 'costo-tab') switchCostoTab(target.dataset.ct);
     else if (action === 'open-form') openNewForm();
     else if (action === 'edit-gasto') openEditForm(target.dataset.id);
+    else if (action === 'delete-gasto') deleteGasto(target.dataset.id);
+    else if (action === 'open-empleado-new') openNewEmpleadoForm();
+    else if (action === 'edit-empleado') openEditEmpleadoForm(target.dataset.id);
+    else if (action === 'delete-empleado') deleteEmpleado(target.dataset.id);
+    else if (action === 'open-tiempo-new') openNewTiempoForm();
+    else if (action === 'edit-tiempo') openEditTiempoForm(target.dataset.id);
+    else if (action === 'delete-tiempo') deleteTiempo(target.dataset.id);
+    else if (action === 'open-otro-new') openNewOtroForm();
+    else if (action === 'edit-otro') openEditOtroForm(target.dataset.id);
+    else if (action === 'delete-otro') deleteOtro(target.dataset.id);
     else if (action === 'close-screen') closeScreen();
     else if (action === 'open-config') openConfig();
-    else if (action === 'delete-gasto') deleteGasto(target.dataset.id);
-    else if (action === 'refresh') refresh();
+    else if (action === 'refresh') refreshCurrentView();
     else if (action === 'quick-period') setQuickPeriod(target.dataset.range);
     else if (action === 'report-tab') { state.reportTab = target.dataset.rt; render(); }
     else if (action === 'reset-config') resetConfig();
@@ -821,8 +1224,12 @@
     if (!form) return;
     e.preventDefault();
     var fd = new FormData(form);
-    if (form.dataset.form === 'gasto') onSubmitGastoForm(fd);
-    else if (form.dataset.form === 'config') onSubmitConfigForm(fd);
+    var type = form.dataset.form;
+    if (type === 'gasto') onSubmitGastoForm(fd);
+    else if (type === 'config') onSubmitConfigForm(fd);
+    else if (type === 'empleado') onSubmitEmpleadoForm(fd);
+    else if (type === 'tiempo') onSubmitTiempoForm(fd);
+    else if (type === 'otro') onSubmitOtroForm(fd);
   });
 
   appEl.addEventListener('input', function (e) {
@@ -830,6 +1237,11 @@
     if (id === 'search-proveedor') { state.search = e.target.value; render(); }
     else if (id === 'period-desde') { state.period.desde = e.target.value; state.quickPeriod = 'custom'; render(); }
     else if (id === 'period-hasta') { state.period.hasta = e.target.value; state.quickPeriod = 'custom'; render(); }
+    else if (id === 'tf-normales' || id === 'tf-extras') updateTiempoPreview();
+  });
+
+  appEl.addEventListener('change', function (e) {
+    if (e.target.id === 'tf-empleado') updateTiempoPreview();
   });
 
   // ---------- Arranque ----------
@@ -837,8 +1249,4 @@
   if (!state.config) state.screen = 'config';
   render();
   if (state.config) loadInitialData();
-
-  if ('serviceWorker' in navigator) {
-    // Sin service worker por ahora: se evita para que los datos nunca se muestren "viejos" en caché.
-  }
 })();
