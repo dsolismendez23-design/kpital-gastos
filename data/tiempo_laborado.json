@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "id": "mr5l33uswvvi7d",
+    "creadoEn": "2026-07-03T23:48:00.964Z",
+    "empleadoId": "mr5l1mhav8w4g5",
+    "empleadoNombre": "Diego Jarquín",
+    "fecha": "2026-06-30",
+    "horasNormales": 0,
+    "horasExtras": 5.5,
+    "precioHoraNormal": 1507.38,
+    "precioHoraExtra": 2261.07,
+    "monto": 12435.885
+  }
+]
