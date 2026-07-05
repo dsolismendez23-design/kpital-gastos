@@ -265,8 +265,8 @@
   // ---------- Carga y sincronización (según la vista activa) ----------
 
   function neededCollectionsForView() {
-    if (state.tab === 'gastos') return ['gastos'];
-    if (state.tab === 'reportes') return ['gastos'];
+    if (state.tab === 'gastos') return ['gastos', 'tiempo', 'otros'];
+    if (state.tab === 'reportes') return ['gastos', 'tiempo', 'otros'];
     if (state.tab === 'costo') return state.costoTab === 'tiempo' ? ['empleados', 'tiempo'] : ['otros'];
     return [];
   }
@@ -643,11 +643,25 @@
     onSubmitConfigForm(fd);
   }
 
-  // ---------- Cálculos de reportes (Gastos) ----------
+  // ---------- Cálculos de reportes (Gastos + Costo Operativo) ----------
+
+  function buildUnifiedGastos() {
+    var list = [];
+    state.data.gastos.list.forEach(function (g) {
+      list.push({ id: g.id, fecha: g.fecha, nombre: g.proveedor, monto: g.monto, categoria: g.pagadoPor, tipo: 'gasto' });
+    });
+    state.data.tiempo.list.forEach(function (t) {
+      list.push({ id: t.id, fecha: t.fecha, nombre: t.empleadoNombre, monto: t.monto, categoria: 'Mano de obra', tipo: 'tiempo' });
+    });
+    state.data.otros.list.forEach(function (o) {
+      list.push({ id: o.id, fecha: o.fecha, nombre: o.concepto, monto: o.monto, categoria: 'Costo operativo', tipo: 'otro' });
+    });
+    return list;
+  }
 
   function filteredGastosByPeriod() {
     var desde = state.period.desde, hasta = state.period.hasta;
-    return state.data.gastos.list.filter(function (g) {
+    return buildUnifiedGastos().filter(function (g) {
       if (desde && g.fecha < desde) return false;
       if (hasta && g.fecha > hasta) return false;
       return true;
@@ -691,6 +705,38 @@
     });
   }
 
+  function preprocessImageForOcr(file) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var maxDim = 1800;
+          var scale = Math.min(2, maxDim / Math.max(img.width, img.height));
+          if (scale < 1) scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          var w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          var imageData = ctx.getImageData(0, 0, w, h);
+          var d = imageData.data;
+          for (var i = 0; i < d.length; i += 4) {
+            var gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            gray = (gray - 128) * 1.5 + 128;
+            gray = gray < 0 ? 0 : (gray > 255 ? 255 : gray);
+            d[i] = d[i + 1] = d[i + 2] = gray;
+          }
+          ctx.putImageData(imageData, 0, 0);
+          canvas.toBlob(function (blob) { resolve(blob || file); }, 'image/png');
+        } catch (e) {
+          resolve(file);
+        }
+      };
+      img.onerror = function () { resolve(file); };
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
   function parseAmountToken(str) {
     if (!str) return null;
     var cleaned = str.replace(/[^\d.,]/g, '');
@@ -708,6 +754,17 @@
       val = parseFloat(cleaned.replace(/[.,]/g, ''));
     }
     return isNaN(val) ? null : val;
+  }
+
+  var PROVEEDOR_NOISE_WORDS = [
+    'factura', 'recibo', 'tiquete', 'ticket', 'comprobante', 'cliente', 'ruc', 'cedula',
+    'telefono', 'tel', 'fecha', 'hora', 'caja', 'copia', 'original', 'senor', 'senora',
+    'direccion', 'nit', 'consumidor', 'final', 'gracias', 'vuelto', 'efectivo', 'tarjeta',
+    'subtotal', 'total', 'iva', 'impuesto', 'descuento', 'articulo', 'cantidad', 'precio', 'no.'
+  ];
+
+  function stripAccents(str) {
+    return String(str || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
   }
 
   function extractInvoiceFields(text) {
@@ -732,24 +789,33 @@
     }
 
     var monto = null;
-    var reTotalLine = /total[^0-9]{0,15}([\d][\d.,]*)/i;
-    for (var j = 0; j < lines.length; j++) {
+    var reTotalLine = /\btotal(\s*(a\s*pagar|general|final|neto))?[^0-9]{0,18}([\d][\d.,]*)/i;
+    for (var j = lines.length - 1; j >= 0; j--) {
+      if (/subtotal/i.test(lines[j])) continue;
       var mt = lines[j].match(reTotalLine);
       if (mt) {
-        var parsed = parseAmountToken(mt[1]);
+        var parsed = parseAmountToken(mt[3]);
         if (parsed != null && parsed > 0) { monto = parsed; break; }
       }
     }
     if (monto == null) {
       var allNums = text.match(/\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?/g) || [];
-      var parsedNums = allNums.map(parseAmountToken).filter(function (n) { return n != null && n > 0; });
-      if (parsedNums.length) monto = Math.max.apply(null, parsedNums);
+      var parsedNums = allNums
+        .map(parseAmountToken)
+        .filter(function (n) { return n != null && n > 0 && n < 5000000; });
+      // Prefiere montos con decimales (más probable que sean dinero y no cédulas/teléfonos)
+      var withDecimals = parsedNums.filter(function (n) { return Math.round(n * 100) % 100 !== 0; });
+      var pool = withDecimals.length ? withDecimals : parsedNums;
+      if (pool.length) monto = Math.max.apply(null, pool);
     }
 
     var proveedor = '';
     for (var k = 0; k < lines.length; k++) {
       var l = lines[k];
-      if (l.length >= 3 && /[a-zA-ZÀ-ÿ]{3,}/.test(l) && !/^\d/.test(l)) { proveedor = l; break; }
+      var normalized = stripAccents(l).toLowerCase();
+      var isNoise = PROVEEDOR_NOISE_WORDS.some(function (w) { return normalized.indexOf(w) !== -1; });
+      var mostlyDigits = (l.match(/\d/g) || []).length > l.length / 2;
+      if (l.length >= 3 && /[a-zA-ZÀ-ÿ]{3,}/.test(l) && !isNoise && !mostlyDigits) { proveedor = l; break; }
     }
 
     return { fecha: fecha, proveedor: proveedor, monto: monto };
@@ -759,8 +825,9 @@
     if (!state.fotoState || !state.fotoState.file) return;
     state.fotoState.processing = true;
     render();
-    loadTesseractScript().then(function () {
-      return Tesseract.recognize(state.fotoState.file, 'spa');
+    var originalFile = state.fotoState.file;
+    Promise.all([loadTesseractScript(), preprocessImageForOcr(originalFile)]).then(function (results) {
+      return Tesseract.recognize(results[1], 'spa');
     }).then(function (result) {
       var text = (result && result.data && result.data.text) || '';
       state.fotoState.processing = false;
@@ -791,8 +858,8 @@
   function buildReportePdfDoc() {
     var filtered = filteredGastosByPeriod();
     var total = filtered.reduce(function (s, g) { return s + (Number(g.monto) || 0); }, 0);
-    var porProveedor = groupBy(filtered, 'proveedor');
-    var porPagado = groupBy(filtered, 'pagadoPor');
+    var porProveedor = groupBy(filtered, 'nombre');
+    var porPagado = groupBy(filtered, 'categoria');
     var periodoLabel = (state.period.desde || state.period.hasta)
       ? ('Periodo: ' + (state.period.desde ? formatDateDisplay(state.period.desde) : 'inicio') + ' a ' + (state.period.hasta ? formatDateDisplay(state.period.hasta) : 'hoy'))
       : 'Periodo: todos los registros';
@@ -813,8 +880,8 @@
 
     doc.setFontSize(12);
     doc.text('Total gastado: ' + formatMoneyPdf(total), 14, y); y += 7;
-    doc.text('Cantidad de facturas: ' + filtered.length, 14, y); y += 7;
-    doc.text('Promedio por factura: ' + formatMoneyPdf(filtered.length ? total / filtered.length : 0), 14, y); y += 12;
+    doc.text('Cantidad de registros: ' + filtered.length, 14, y); y += 7;
+    doc.text('Promedio por registro: ' + formatMoneyPdf(filtered.length ? total / filtered.length : 0), 14, y); y += 12;
 
     function section(title, rows) {
       ensureSpace(14);
@@ -831,8 +898,8 @@
       y += 6;
     }
 
-    section('Por proveedor', porProveedor);
-    section('Pagado por', porPagado);
+    section('Por proveedor / concepto', porProveedor);
+    section('Pagado por / categoria', porPagado);
 
     return doc;
   }
@@ -1001,16 +1068,16 @@
 
   function renderGastosTab() {
     var search = state.search.trim().toLowerCase();
-    var list = state.data.gastos.list.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || '') || (b.creadoEn || '').localeCompare(a.creadoEn || ''); });
+    var list = buildUnifiedGastos().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
+    var totalCount = list.length;
     if (search) {
       list = list.filter(function (g) {
-        return (g.proveedor || '').toLowerCase().indexOf(search) !== -1 ||
-               (g.pagadoPor || '').toLowerCase().indexOf(search) !== -1;
+        return (g.nombre || '').toLowerCase().indexOf(search) !== -1 ||
+               (g.categoria || '').toLowerCase().indexOf(search) !== -1;
       });
     }
-    var totalCount = state.data.gastos.list.length;
     var html = '<div class="btn-row" style="margin-bottom:10px;"><button type="button" class="btn btn-secondary" data-action="open-foto-form">&#128248; Cargar factura por foto</button></div>';
-    html += '<div class="search-row"><input id="search-proveedor" type="text" placeholder="Buscar por proveedor o pagado por…" value="' + escapeHtml(state.search) + '" /></div>';
+    html += '<div class="search-row"><input id="search-proveedor" type="text" placeholder="Buscar por proveedor, empleado, concepto o categoría…" value="' + escapeHtml(state.search) + '" /></div>';
 
     if (totalCount === 0) {
       html += '<div class="empty-state"><span class="big">&#128221;</span>Aún no hay gastos registrados.<br/>Toca el botón + para agregar el primero.</div>';
@@ -1027,12 +1094,13 @@
   }
 
   function renderGastoItem(g) {
+    var editAction = g.tipo === 'tiempo' ? 'edit-tiempo' : (g.tipo === 'otro' ? 'edit-otro' : 'edit-gasto');
     return (
-      '<div class="gasto-item" data-action="edit-gasto" data-id="' + escapeHtml(g.id) + '">' +
+      '<div class="gasto-item" data-action="' + editAction + '" data-id="' + escapeHtml(g.id) + '">' +
         '<div class="left">' +
-          '<div class="proveedor">' + escapeHtml(g.proveedor) + '</div>' +
+          '<div class="proveedor">' + escapeHtml(g.nombre) + '</div>' +
           '<div class="meta">' + escapeHtml(formatDateDisplay(g.fecha)) + '</div>' +
-          '<span class="badge">Pagado por: ' + escapeHtml(g.pagadoPor) + '</span>' +
+          '<span class="badge">' + (g.tipo === 'gasto' ? 'Pagado por: ' + escapeHtml(g.categoria) : escapeHtml(g.categoria)) + '</span>' +
         '</div>' +
         '<div class="monto">' + escapeHtml(formatMoney(g.monto)) + '</div>' +
       '</div>'
@@ -1063,12 +1131,12 @@
     var html = renderPeriodPicker();
     html += (
       '<div class="segmented">' +
-        segBtn('resumen', 'Resumen') + segBtn('proveedor', 'Por proveedor') + segBtn('pagado', 'Pagado por') +
+        segBtn('resumen', 'Resumen') + segBtn('proveedor', 'Proveedor') + segBtn('pagado', 'Categoría') +
       '</div>'
     );
     if (state.reportTab === 'resumen') html += renderResumen(filtered);
-    else if (state.reportTab === 'proveedor') html += renderGroupTable(filtered, 'proveedor', 'Proveedor');
-    else html += renderGroupTable(filtered, 'pagadoPor', 'Pagado por');
+    else if (state.reportTab === 'proveedor') html += renderGroupTable(filtered, 'nombre', 'Por proveedor / concepto');
+    else html += renderGroupTable(filtered, 'categoria', 'Pagado por / categoría');
     return html;
   }
 
@@ -1084,7 +1152,7 @@
       '<div class="summary-total">' +
         '<div class="amount">' + escapeHtml(formatMoney(total)) + '</div>' +
         '<div class="label">Total gastado en el período</div>' +
-        '<div class="summary-sub"><div><b>' + filtered.length + '</b>facturas</div>' +
+        '<div class="summary-sub"><div><b>' + filtered.length + '</b>registros</div>' +
         '<div><b>' + (filtered.length ? escapeHtml(formatMoney(total / filtered.length)) : formatMoney(0)) + '</b>promedio</div></div>' +
         '<div style="margin-top:16px;"><button type="button" class="btn btn-secondary" data-action="download-report-pdf">&#128196; Descargar / compartir PDF</button></div>' +
       '</div>'
@@ -1098,7 +1166,7 @@
         return (
           '<div class="report-row-wrap">' +
             '<div class="report-row" style="border:none;padding:0;">' +
-              '<div><div class="name">' + escapeHtml(monthLabel(m.name)) + '</div><div class="count">' + m.count + ' facturas</div></div>' +
+              '<div><div class="name">' + escapeHtml(monthLabel(m.name)) + '</div><div class="count">' + m.count + ' registros</div></div>' +
               '<div class="amt">' + escapeHtml(formatMoney(m.total)) + '</div>' +
             '</div>' +
             '<div class="bar-bg"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
@@ -1120,7 +1188,7 @@
     html += rows.map(function (r) {
       return (
         '<div class="report-row">' +
-          '<div><div class="name">' + escapeHtml(r.name) + '</div><div class="count">' + r.count + ' factura' + (r.count === 1 ? '' : 's') + '</div></div>' +
+          '<div><div class="name">' + escapeHtml(r.name) + '</div><div class="count">' + r.count + ' registro' + (r.count === 1 ? '' : 's') + '</div></div>' +
           '<div class="amt">' + escapeHtml(formatMoney(r.total)) + '</div>' +
         '</div>'
       );
