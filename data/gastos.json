@@ -118,5 +118,13 @@
     "monto": 36660,
     "pagadoPor": "Modatex",
     "creadoEn": "2026-07-17T20:19:43.309Z"
+  },
+  {
+    "id": "mrpdts2msvrcab",
+    "fecha": "2026-07-17",
+    "proveedor": "El Lagar",
+    "monto": 23470,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-17T20:20:11.998Z"
   }
 ]
