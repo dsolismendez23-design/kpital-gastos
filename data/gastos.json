@@ -158,5 +158,13 @@
     "monto": 6025,
     "pagadoPor": "Modatex",
     "creadoEn": "2026-07-27T16:09:16.190Z"
+  },
+  {
+    "id": "ms3faow30ogkow",
+    "fecha": "2026-07-21",
+    "proveedor": "El Lagar",
+    "monto": 11100,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-27T16:10:07.107Z"
   }
 ]
