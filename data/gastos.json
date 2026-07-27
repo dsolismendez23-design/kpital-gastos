@@ -142,5 +142,13 @@
     "monto": 51045,
     "pagadoPor": "Modatex",
     "creadoEn": "2026-07-27T16:08:09.288Z"
+  },
+  {
+    "id": "ms3f8yr2lq8txu",
+    "fecha": "2026-07-21",
+    "proveedor": "Pinturas Sur",
+    "monto": 10775,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-27T16:08:46.574Z"
   }
 ]
