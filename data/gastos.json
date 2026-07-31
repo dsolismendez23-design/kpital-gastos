@@ -190,5 +190,13 @@
     "monto": 12400,
     "pagadoPor": "Modatex",
     "creadoEn": "2026-07-31T15:32:53.465Z"
+  },
+  {
+    "id": "ms93qs58y5uhk5",
+    "fecha": "2026-07-29",
+    "proveedor": "EPA",
+    "monto": 27370,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-31T15:33:19.484Z"
   }
 ]
