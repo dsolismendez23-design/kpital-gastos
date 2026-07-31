@@ -174,5 +174,13 @@
     "monto": 12100,
     "pagadoPor": "Modatex",
     "creadoEn": "2026-07-27T16:10:27.778Z"
+  },
+  {
+    "id": "ms93pozvgrxl3q",
+    "fecha": "2026-07-29",
+    "proveedor": "Andamios",
+    "monto": 16000,
+    "pagadoPor": "Modatex",
+    "creadoEn": "2026-07-31T15:32:28.747Z"
   }
 ]
