@@ -58,5 +58,17 @@
     "precioHoraNormal": 1507.38,
     "precioHoraExtra": 2261.07,
     "monto": 31654.980000000003
+  },
+  {
+    "id": "mt1r9cvzmwncrp",
+    "creadoEn": "2026-08-20T16:49:10.271Z",
+    "empleadoId": "mr5l1mhav8w4g5",
+    "empleadoNombre": "Diego Jarquín",
+    "fecha": "2026-08-15",
+    "horasNormales": 0,
+    "horasExtras": 2,
+    "precioHoraNormal": 1507.38,
+    "precioHoraExtra": 2261.07,
+    "monto": 4522.14
   }
 ]
