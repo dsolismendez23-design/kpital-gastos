@@ -82,5 +82,17 @@
     "precioHoraNormal": 1507.38,
     "precioHoraExtra": 2261.07,
     "monto": 26002.305
+  },
+  {
+    "id": "mt1ray9wn482if",
+    "creadoEn": "2026-08-20T16:50:24.644Z",
+    "empleadoId": "mr5l2bp8a5wtih",
+    "empleadoNombre": "Oliver Rodríguez",
+    "fecha": "2026-08-15",
+    "horasNormales": 0,
+    "horasExtras": 4.25,
+    "precioHoraNormal": 1507.38,
+    "precioHoraExtra": 2261.07,
+    "monto": 9609.5475
   }
 ]
